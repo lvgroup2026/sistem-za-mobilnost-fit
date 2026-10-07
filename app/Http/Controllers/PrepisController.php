@@ -12,7 +12,7 @@ class PrepisController extends Controller
 {
     public function index(Request $request)
     {
-        $query = \App\Models\MappingRequest::with(['professor', 'student', 'fakultet', 'subjects.straniPredmet', 'subjects.fitPredmet'])->latest();
+        $query = \App\Models\MappingRequest::with(['professor', 'student', 'fakultet', 'subjects.straniPredmet', 'subjects.fitPredmet', 'subjects.professor'])->latest();
 
         if ($request->filled('search')) {
             $search = $request->search;
@@ -30,9 +30,39 @@ class PrepisController extends Controller
             });
         }
 
+        $statusi = ['u_obradi', 'spremno', 'prihvaceni', 'odbijeni'];
+        $brojPoStatusu = ['svi' => (clone $query)->count()];
+        foreach ($statusi as $status) {
+            $brojPoStatusu[$status] = $this->filtrirajPoStatusu(clone $query, $status)->count();
+        }
+
+        $aktivniStatus = in_array($request->status, $statusi) ? $request->status : 'svi';
+        if ($aktivniStatus !== 'svi') {
+            $this->filtrirajPoStatusu($query, $aktivniStatus);
+        }
+
         $mappingRequests = $query->paginate(7)->withQueryString();
-            
-        return view('prepis.index', compact('mappingRequests'));
+
+        return view('prepis.index', compact('mappingRequests', 'brojPoStatusu', 'aktivniStatus'));
+    }
+
+    private function filtrirajPoStatusu($query, string $status)
+    {
+        // Ispit je neobrađen dok ga profesor nije ni povezao ni odbio
+        $neobradjen = function ($q) {
+            $q->whereNull('fit_predmet_id')
+              ->where(fn ($q) => $q->where('is_rejected', false)->orWhereNull('is_rejected'));
+        };
+
+        return match ($status) {
+            'u_obradi' => $query->where('status', 'pending')
+                ->where(fn ($q) => $q->whereHas('subjects', $neobradjen)->orWhereDoesntHave('subjects')),
+            'spremno' => $query->where('status', 'pending')
+                ->whereHas('subjects')
+                ->whereDoesntHave('subjects', $neobradjen),
+            'prihvaceni' => $query->where('status', 'accepted'),
+            'odbijeni' => $query->where('status', 'rejected'),
+        };
     }
 
 
@@ -367,14 +397,18 @@ class PrepisController extends Controller
         
         $student->load('predmeti');
 
+        // Više stranih predmeta može biti priznato kao jedan FIT predmet, pa se ocjene grupišu
+        $ocjenePoFitPredmetu = [];
         foreach ($mappingRequest->subjects as $mappingSubject) {
-            if ($mappingSubject->fit_predmet_id) {
+            if ($mappingSubject->fit_predmet_id && !$mappingSubject->is_rejected) {
                 $foreignSubject = $student->predmeti->firstWhere('id', $mappingSubject->strani_predmet_id);
-                
-                $grade = $foreignSubject ? $foreignSubject->pivot->grade : null;
-                
-                $syncData[$mappingSubject->fit_predmet_id] = ['grade' => $grade];
+
+                $ocjenePoFitPredmetu[$mappingSubject->fit_predmet_id][] = $foreignSubject ? $foreignSubject->pivot->grade : null;
             }
+        }
+
+        foreach ($ocjenePoFitPredmetu as $fitPredmetId => $ocjene) {
+            $syncData[$fitPredmetId] = ['grade' => WordExportService::ocjenaPriznatogPredmeta($ocjene)];
         }
             
         // Use syncWithoutDetaching to ADD new subjects while keeping the Foreign ones

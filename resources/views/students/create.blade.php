@@ -10,6 +10,7 @@
 
       <form action="{{ route('students.store') }}" method="POST">
         @csrf
+        <input type="hidden" name="tor_uvezen" id="tor_uvezen" value="0">
 
         <div class="grid grid-cols-1 md:grid-cols-2 gap-4" @platforma-student-selected.window="platformaLinked = true" x-data="{
             platformaLinked: false,
@@ -195,7 +196,7 @@
             </div>
             <div x-show="!hideLocalSubjects">
             <x-subject-selector :subjects="$predmeti" :selected="$selectedSubjects">
-                <div x-data="{ visible: false }" @faculty-changed.window="visible = ($event.detail === 'FIT')" x-show="visible" style="display: none;">
+                <div x-data="{ visible: false }" @faculty-changed.window="visible = !!document.querySelector('select[name=fakultet_id]').value" x-show="visible" style="display: none;">
                     <button type="button" @click="$dispatch('open-tor-modal')"
                         class="bg-green-600 hover:bg-green-700 text-white text-sm font-semibold px-3 py-1 rounded shadow transform transition hover:scale-105">
                         Unesi TOR
@@ -259,6 +260,7 @@
                            this.uploading = false;
                            if (data.success) {
                                window.dispatchEvent(new CustomEvent('set-selection', { detail: data.matched }));
+                               document.getElementById('tor_uvezen').value = 1;
                                alert(data.message);
                                this.open = false;
                                fileInput.value = '';
@@ -290,8 +292,8 @@
                           <span class="ml-2">Engleski</span>
                       </label>
                       <label class="inline-flex items-center">
-                          <input type="radio" name="language" value="Srpski" x-model="language" class="form-radio text-green-600">
-                          <span class="ml-2">Srpski</span>
+                          <input type="radio" name="language" value="Crnogorski" x-model="language" class="form-radio text-green-600">
+                          <span class="ml-2">Crnogorski</span>
                       </label>
                   </div>
               </div>

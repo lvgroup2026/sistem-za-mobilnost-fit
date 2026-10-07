@@ -6,6 +6,7 @@ use App\Models\MappingRequest;
 use PhpOffice\PhpWord\PhpWord;
 use PhpOffice\PhpWord\IOFactory;
 use PhpOffice\PhpWord\SimpleType\Jc;
+use PhpOffice\PhpWord\Style\Tab;
 use Carbon\Carbon;
 
 class WordExportService
@@ -13,136 +14,202 @@ class WordExportService
     public function generisiPredlog(MappingRequest $request)
     {
         $phpWord = new PhpWord();
-        
+
         // Define styles
         $phpWord->setDefaultFontName('Cambria');
         $phpWord->setDefaultFontSize(11);
 
         $section = $phpWord->addSection();
+        $this->dodajZaglavlje($section);
 
-        // 1. Header: Broj & Date
-        $headerStyle = ['bold' => false];
-        $section->addText("Broj: _________", $headerStyle);
-        $section->addText("Podgorica, " . Carbon::now()->format('d.m.Y') . ". godine", $headerStyle);
+        $student = $request->student;
+        $studentName = $student->ime . " " . $student->prezime;
+        $zensko = $student->pol === 'zensko';
+        $foreignFacultyName = $request->fakultet ? $request->fakultet->naziv : "Unknown Faculty";
+
+        $justify = ['alignment' => Jc::BOTH, 'spaceAfter' => 160];
+        $numbered = $justify + ['tabs' => [new Tab('left', 720)]];
+
+        // 1. Broj & datum
+        $section->addText("Broj:");
+        $section->addText("Podgorica, " . $this->datumSlovima(Carbon::now()) . " godine");
         $section->addTextBreak(1);
 
         // 2. Preamble
-        $textRun = $section->addTextRun(['alignment' => Jc::BOTH]);
-        $textRun->addText("Na osnovu čl. 19. Pravila studiranja na osnovnim studijama Univerziteta „Mediteran“ Podgorica, rješavajući po zahtjevu studenta ");
-        
-        $studentName = $request->student->ime . " " . $request->student->prezime;
-        $textRun->addText($studentName . ", ", ['bold' => true]);
-        
-        $textRun->addText("dekanici Fakulteta za informacione tehnologije podnosim");
-        $section->addTextBreak(1);
+        $textRun = $section->addTextRun($justify);
+        $textRun->addText("Na osnovu čl. 19. Pravila studiranja na osnovnim studijama Univerziteta „Mediteran“ Podgorica, rješavajući po zahtjevu " . ($zensko ? "studentkinje " : "studenta ") . $studentName . ", dekanici Fakulteta za informacione tehnologije podnosim");
 
         // 3. Title
         $section->addText(
-            "PREDLOG RJEŠENJA O PRIZNAVANJU ISPITA SA STRUČNIM MIŠLJENJIMA", 
-            ['bold' => true, 'size' => 11], 
-            ['alignment' => Jc::CENTER]
+            "PREDLOG RJEŠENJA O PRIZNAVANJU ISPITA SA STRUČNIM MIŠLJENJIMA",
+            ['bold' => true],
+            ['alignment' => Jc::CENTER, 'spaceBefore' => 240, 'spaceAfter' => 240]
         );
-        $section->addTextBreak(1);
 
         // 4. Main Body Intro
-        $year = $request->student->godina_studija;
-        $yearString = match((int)$year) {
-            1 => "prve godine",
-            2 => "druge godine",
-            3 => "treće godine",
-            4 => "četvrte godine",
-            default => $year . ". godine"
+        $yearString = match((int) $student->godina_studija) {
+            1 => "prve",
+            2 => "druge",
+            3 => "treće",
+            4 => "četvrte",
+            default => $student->godina_studija . "."
         };
-       
-        $foreignFacultyName = $request->fakultet ? $request->fakultet->naziv : "Unknown Faculty";
 
-        $bodyRun = $section->addTextRun(['alignment' => Jc::BOTH]);
-        $bodyRun->addText("Studentu ");
+        $bodyRun = $section->addTextRun($justify);
         $bodyRun->addText($studentName, ['bold' => true]);
-        $bodyRun->addText(", studentu $yearString Fakulteta za informacione tehnologije Univerziteta „Mediteran“ Podgorica, priznaju se položeni ispiti i dobijene ocjene na ");
-        $bodyRun->addText($foreignFacultyName, ['bold' => true]);
-        $bodyRun->addText(" kao položeni ispiti i dobijene ocjene na Fakultetu za informacione tehnologije Univerziteta „Mediteran“, kako slijedi:");
-        $section->addTextBreak(1);
+        $bodyRun->addText(", " . ($zensko ? "studentkinji" : "studentu") . " $yearString godine Fakulteta za informacione tehnologije Univerziteta „Mediteran“ Podgorica, priznaju se položeni ispiti i dobijene ocjene na $foreignFacultyName, kao položeni ispiti i dobijene ocjene na Fakultetu za informacione tehnologije Univerziteta „Mediteran“, kako slijedi:");
 
-        $matchedSubjects = $request->subjects->filter(function($s) {
-            return !is_null($s->fit_predmet_id);
-        });
+        // 5. Jedna tačka po FIT predmetu; više stranih predmeta može biti priznato kao jedan FIT predmet
+        $grupe = $request->subjects
+            ->filter(fn ($s) => !is_null($s->fit_predmet_id) && !$s->is_rejected)
+            ->groupBy('fit_predmet_id');
 
-        $grouped = $matchedSubjects->groupBy('professor_id');
+        $counter = 1;
+        foreach ($grupe as $grupa) {
+            $fitPredmet = $grupa->first()->fitPredmet;
+            $strani = $grupa->map(function ($subject) use ($student) {
+                $studentSubject = $student->predmeti->find($subject->strani_predmet_id);
+                return [
+                    'naziv' => $subject->straniPredmet->naziv,
+                    'ects' => $subject->straniPredmet->ects,
+                    'ocjena' => $studentSubject?->pivot->grade,
+                ];
+            })->values();
 
-        foreach ($grouped as $profId => $subjects) {
-            
-            $counter = 1;
-            foreach ($subjects as $subject) {
-                $foreignSubjName = $subject->straniPredmet->naziv;
-                
-                $studentSubject = $request->student->predmeti->find($subject->strani_predmet_id);
-                $grade = $studentSubject ? ($studentSubject->pivot->grade ?? '-') : '-';
-                $foreignEcts = $subject->straniPredmet->ects;
+            $fitOcjena = self::ocjenaPriznatogPredmeta($strani->pluck('ocjena')->all());
 
-                $fitSubjName = $subject->fitPredmet->naziv;
-                $fitEcts = $subject->fitPredmet->ects;
-                
-                $translatedGrade = match((int)$grade) {
-                    10 => "„A – odlican",
-                    9 => "„B – vrlo dobar“",
-                    8 => "„C – dobar“",
-                    7 => "„D – zadovoljan“",
-                    6 => "„E – dovoljan“",
-                    default => "„" . $grade . "“"
-                };
+            $pRun = $section->addTextRun($numbered);
+            $pRun->addText($counter . ".\t" . ($strani->count() > 1 ? "Ispiti " : "Ispit "));
 
-                $paragraphStyle = ['tabs' => [new \PhpOffice\PhpWord\Style\Tab('left', 720)]]; // 720 twips = 0.5 inch
-                $pRun = $section->addTextRun(['alignment' => Jc::BOTH, 'tabs' => [new \PhpOffice\PhpWord\Style\Tab('left', 720)]]);
-                
-                // Numbering with Tab
-                $pRun->addText($counter . ".\t");
-                
-                $pRun->addText($foreignSubjName, ['bold' => true]);
-                $pRun->addText(", položen na $foreignFacultyName i sa dobijenom ocjenom $translatedGrade, $foreignEcts ECTS, priznaje se kao položen ispit na Fakultetu za informacione tehnologije Univerziteta „Mediteran“ Podgorica pod nazivom ");
-                $pRun->addText($fitSubjName, ['bold' => true]);
-                $pRun->addText(" sa ocjenom $translatedGrade, $fitEcts ECTS.");
-                
-                $counter++;
+            foreach ($strani as $i => $predmet) {
+                if ($i > 0) {
+                    $pRun->addText($i === $strani->count() - 1 ? " i " : ", ");
+                }
+                $pRun->addText($predmet['naziv'], ['bold' => true]);
             }
-            
-            $profName = $subjects->first()->professor->name ?? 'Unknown Professor';
-            
+
+            if ($strani->count() === 1) {
+                $predmet = $strani->first();
+                $pRun->addText(", položen na $foreignFacultyName i sa dobijenom ocjenom " . $this->ocjenaSlovima($predmet['ocjena']) . ", {$predmet['ects']} ECTS, priznaje se");
+            } else {
+                $pRun->addText(", " . ($strani->count() === 2 ? "oba" : "svi") . " položeni na $foreignFacultyName i sa " . $this->ocjeneViseIspita($strani) . ", priznaje se");
+            }
+
+            $pRun->addText(" kao položen ispit na Fakultetu za informacione tehnologije Univerziteta „Mediteran“ Podgorica pod nazivom ");
+            $pRun->addText($fitPredmet->naziv, ['bold' => true]);
+            $pRun->addText(" sa ocjenom " . $this->ocjenaSlovima($fitOcjena) . ", {$fitPredmet->ects} ECTS.");
+
+            $professor = $grupa->first(fn ($s) => $s->professor)?->professor;
+
+            $misljenje = $section->addTextRun($justify);
+            $misljenje->addText("Stručno mišljenje predmetnog nastavnika", ['bold' => true]);
+            $misljenje->addText(": Uvidom u dostavljeni nastavni plan i program, ");
+            $misljenje->addText("saglasan/na sam", ['bold' => true]);
+            $misljenje->addText(" da se prizna ispit s obzirom na zaključak da se radi o predmetima podudarnog sadržaja i obima.");
+
             $section->addTextBreak(1);
-            $section->addText("______________________________________", ['bold' => true]);
-            $section->addText($profName);
-            $section->addTextBreak(1);
+            $section->addText("______________________________________", [], ['spaceAfter' => 0]);
+            $section->addText($professor->name ?? '', [], ['spaceAfter' => 360]);
+
+            $counter++;
         }
 
         // 6. Obrazloženje
-        $section->addTextBreak(1);
-        $section->addText("Obrazloženje", ['bold' => true, 'underline' => 'single'], ['alignment' => Jc::CENTER]);
-        $section->addTextBreak(1);
+        $section->addText("Obrazloženje", ['bold' => true], ['alignment' => Jc::CENTER, 'spaceBefore' => 240, 'spaceAfter' => 240]);
 
-        $obrazlozenjeRun = $section->addTextRun(['alignment' => Jc::BOTH]);
-        $obrazlozenjeRun->addText("Uvidom u dostavljenu Molbu studenta ");
- 
-        $obrazlozenjeRun->addText($studentName . ", ", ['bold' => false]);
-        
-        $obrazlozenjeRun->addText("Uvjerenje o položenim ispitima i Nastavne planove i programe, a nakon pribavljenih stručnih mišljenja predmetnih nastavnika, koji su sastavni dio ovog akta, predlažem da dekanica Fakulteta za informacione tehnologije Univerziteta „Mediteran“ Podgorica donese ");
+        $obrazlozenjeRun = $section->addTextRun($justify);
+        $obrazlozenjeRun->addText("Uvidom u dostavljenu Molbu " . ($zensko ? "studentkinje " : "studenta ") . $studentName . ", Uvjerenje o položenim ispitima i Nastavne planove i programe, a nakon pribavljenih stručnih mišljenja predmetnih nastavnika, koji su sastavni dio ovog akta, predlažem da dekanica Fakulteta za informacione tehnologije Univerziteta „Mediteran“ Podgorica donese ");
         $obrazlozenjeRun->addText("rješenje o priznavanju položenih ispita", ['bold' => true]);
         $obrazlozenjeRun->addText(" navedenih u dispozitivu gore navedenog predloga.");
-        
+
         $section->addTextBreak(2);
 
         // 7. Final Signature
         $section->addText("Prodekanka za nastavu", [], ['alignment' => Jc::RIGHT]);
-        $section->addText("______________________________", [], ['alignment' => Jc::RIGHT]);
-        $section->addText("Doc. dr Žana Knežević", ['bold' => true], ['alignment' => Jc::RIGHT]);
+        $section->addTextBreak(1);
+        $section->addText("______________________________", [], ['alignment' => Jc::RIGHT, 'spaceAfter' => 0]);
+        $section->addText("Doc. dr Žana Knežević", [], ['alignment' => Jc::RIGHT]);
 
         $objWriter = IOFactory::createWriter($phpWord, 'Word2007');
-        $student = $request->student;
         $fileBase = "predlog_priznavanja_{$student->ime}_{$student->prezime}_{$student->br_indexa}";
         $fileName = $fileBase . '_' . time() . '.docx';
         $tempPath = storage_path('app/public/' . $fileName);
         $objWriter->save($tempPath);
 
         return $tempPath;
+    }
+
+    /**
+     * Ocjena FIT predmeta kada se priznaje na osnovu jednog ili više stranih predmeta
+     * (zaokruženi prosjek ocjena stranih predmeta).
+     */
+    public static function ocjenaPriznatogPredmeta(array $ocjene): ?int
+    {
+        $ocjene = array_filter($ocjene, fn ($o) => is_numeric($o));
+
+        return $ocjene ? (int) round(array_sum($ocjene) / count($ocjene)) : null;
+    }
+
+    private function dodajZaglavlje($section): void
+    {
+        $header = $section->addHeader();
+        $table = $header->addTable(['width' => 100 * 50, 'unit' => 'pct']);
+        $table->addRow();
+
+        $lijevo = $table->addCell(1600, ['valign' => 'center']);
+        $logoUniverziteta = public_path('logo_uni_mediteran.png');
+        if (file_exists($logoUniverziteta)) {
+            $lijevo->addImage($logoUniverziteta, ['width' => 85, 'height' => 85, 'alignment' => Jc::LEFT]);
+        }
+
+        $sredina = $table->addCell(6000, ['valign' => 'center']);
+        $sredina->addText("UNIVERZITET „MEDITERAN” PODGORICA", ['bold' => true, 'size' => 14], ['alignment' => Jc::CENTER, 'spaceAfter' => 0]);
+        $sredina->addText("FAKULTET ZA INFORMACIONE TEHNOLOGIJE", ['size' => 13], ['alignment' => Jc::CENTER, 'spaceAfter' => 0]);
+
+        $desno = $table->addCell(1600, ['valign' => 'center']);
+        $logoFakulteta = public_path('logo.png');
+        if (file_exists($logoFakulteta)) {
+            $desno->addImage($logoFakulteta, ['width' => 70, 'height' => 70, 'alignment' => Jc::RIGHT]);
+        }
+
+        $header->addTextBreak(1);
+    }
+
+    private function datumSlovima(Carbon $datum): string
+    {
+        $mjeseci = [
+            1 => 'januar', 'februar', 'mart', 'april', 'maj', 'jun',
+            'jul', 'avgust', 'septembar', 'oktobar', 'novembar', 'decembar',
+        ];
+
+        return $datum->day . ". " . $mjeseci[$datum->month] . " " . $datum->year . ".";
+    }
+
+    private function ocjenaSlovima($ocjena): string
+    {
+        return match ((int) $ocjena) {
+            10 => "„A – odličan“",
+            9 => "„B – vrlo dobar“",
+            8 => "„C – dobar“",
+            7 => "„D – zadovoljava“",
+            6 => "„E – dovoljan“",
+            default => "„" . ($ocjena ?? '-') . "“",
+        };
+    }
+
+    private function ocjeneViseIspita($strani): string
+    {
+        $isteOcjene = $strani->pluck('ocjena')->unique()->count() === 1;
+        $istiEcts = $strani->pluck('ects')->unique()->count() === 1;
+
+        if ($isteOcjene && $istiEcts) {
+            return "dobijenom ocjenom " . $this->ocjenaSlovima($strani->first()['ocjena']) . " i {$strani->first()['ects']} ECTS svaki";
+        }
+
+        $dijelovi = $strani->map(fn ($p) => $this->ocjenaSlovima($p['ocjena']) . " ({$p['ects']} ECTS)")->all();
+        $posljednji = array_pop($dijelovi);
+
+        return "dobijenim ocjenama " . implode(', ', $dijelovi) . " i " . $posljednji;
     }
 
     public function generisiRjesenje(MappingRequest $request)

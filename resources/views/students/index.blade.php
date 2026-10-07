@@ -99,7 +99,7 @@
                       {{ substr($student->ime, 0, 1) }}{{ substr($student->prezime, 0, 1) }}
                     </div>
                     <div class="ml-4">
-                      <div class="text-sm font-medium text-gray-900">{{ $student->ime }} {{ $student->prezime }}
+                      <div class="text-sm font-medium text-gray-900"><a href="{{ route('students.show', $student->id) }}" class="hover:text-indigo-600 hover:underline">{{ $student->ime }} {{ $student->prezime }}</a>
                         @if($student->platforma_student_id)
                           <span title="Povezan sa studentskom platformom (ID {{ $student->platforma_student_id }})" class="ml-1 inline-block w-2 h-2 rounded-full bg-green-500 align-middle"></span>
                         @endif
@@ -117,6 +117,11 @@
                 </td>
                 <td class="px-6 py-4 whitespace-nowrap text-center text-sm font-medium">
                   <div class="flex justify-center space-x-2">
+    <a href="{{ route('students.show', $student->id) }}"
+      class="text-gray-700 hover:text-gray-900 bg-gray-100 hover:bg-gray-200 px-3 py-1 rounded-md transition-colors">
+      Pregled
+    </a>
+
     <a href="{{ route('students.edit', $student->id) }}"
       class="text-indigo-600 hover:text-indigo-900 bg-indigo-50 hover:bg-indigo-100 px-3 py-1 rounded-md transition-colors">
       Izmijeni

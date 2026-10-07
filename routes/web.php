@@ -81,6 +81,7 @@ Route::middleware('adminAuth')->prefix('admin')->group(function () {
     Route::get('/students', [App\Http\Controllers\StudentController::class, 'index'])->name('students.index');
     Route::get('/students/create', [App\Http\Controllers\StudentController::class, 'create'])->name('students.create');
     Route::post('/students', [App\Http\Controllers\StudentController::class, 'store'])->name('students.store');
+    Route::get('/students/{id}', [App\Http\Controllers\StudentController::class, 'show'])->whereNumber('id')->name('students.show');
     Route::get('/students/{id}/edit', [App\Http\Controllers\StudentController::class, 'edit'])->name('students.edit');
     Route::put('/students/{id}', [App\Http\Controllers\StudentController::class, 'update'])->name('students.update');
     Route::post('/students/{id}/upload-tor', [App\Http\Controllers\StudentController::class, 'uploadTor'])->name('students.upload-tor');
